@@ -5,8 +5,6 @@
 </p>
 <br>
 
-> It's interpreters all the way down.
-
 This package implements an interesting staging mechanism in Julia -- for a pure subset of Julia functions, it allows _lifting_ of a function defined by signature `f : R -> R` to a function defined by signature `f : Sym{R} -> Term` where `Sym{R}` is a [SymbolicUtils.jl value](https://symbolicutils.juliasymbolics.org/#creating_symbolic_expressions) and `Term` is a [SymbolicUtils.jl term](https://symbolicutils.juliasymbolics.org/api/#symbols_and_terms).
 
 > This package is based on the same fundamental idea as [SymbolicTracing.jl](https://github.com/MasonProtter/SymbolicTracing.jl) but also exposes levels of granularity in tracing by leveraging the optimizer. In addition, insertion of staging conversion functions is computed during type inference and not runtime expansion of `@generated` functions.
