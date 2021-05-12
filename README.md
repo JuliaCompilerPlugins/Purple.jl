@@ -1,7 +1,7 @@
 # Purple.jl
 
 <p align="center">
-<img height="200" src="assets/purtle.png"/>
+<img height="200" src="assets/turple.png"/>
 </p>
 <br>
 
