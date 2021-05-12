@@ -6,16 +6,22 @@ using Core.Compiler: compact!,
                      getfield_elim_pass!, 
                      adce_pass!
 using SymbolicUtils
-using SymbolicUtils: Symbolic, Term, Sym
+using SymbolicUtils: Symbolic, term, Sym, similarterm, promote_symtype
 using CodeInfoTools
 using CodeInfoTools: resolve
 
+blank(t::Type{Int}) = 0
+blank(t::Type{Float64}) = 0.0
+
 function _lift(f::Function, syms::S, args::K) where {S <: Tuple, K <: Tuple}
-    return Term(f, Any[syms...])
+    t = term(f, syms...)
+    return t
 end
 
 struct LiftContext <: CompilationContext end
-allow(ctx::LiftContext, mod::Module, fn::typeof(_lift), args...) = true
+allow(ctx::LiftContext, mod::Module, fn::typeof(_lift), inner, args...) = true
+allow(ctx::LiftContext, mod::Module, fn::typeof(_lift), inner::typeof(SymbolicUtils.add_t), args...) = false
+allow(ctx::LiftContext, mod::Module, fn::typeof(_lift), inner::typeof(SymbolicUtils.makeadd), args...) = false
 
 function transform(mix::LiftContext, src, sig)
     if !(sig[2] <: Function) || 
@@ -75,9 +81,13 @@ function lift(fn, tt::Type{T};
                             Tuple{typeof(fn), symtypes, T};
                             ctx = LiftContext(), opt = opt)
     else
-        return Mixtape.jit(_lift, 
-                           Tuple{typeof(fn), symtypes, T};
-                           ctx = LiftContext())
+        entry = Mixtape.jit(_lift, 
+                            Tuple{typeof(fn), symtypes, T};
+                            ctx = LiftContext())
+        blanks = Tuple(map(blank, tt.parameters))
+        return function (symargs...)
+            entry(fn, symargs, blanks)
+        end
     end
 end
 
