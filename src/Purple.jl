@@ -1,10 +1,7 @@
 module Purple
 
 using Mixtape
-import Mixtape: CompilationContext, transform, allow, optimize!
-using Core.Compiler: compact!, 
-                     getfield_elim_pass!, 
-                     adce_pass!
+import Mixtape: CompilationContext, transform, allow
 using SymbolicUtils
 using SymbolicUtils: Symbolic, term, Sym, similarterm, promote_symtype
 using CodeInfoTools
@@ -62,15 +59,6 @@ function transform(mix::LiftContext, src, sig)
     return CodeInfoTools.finish(b)
 end 
 
-function optimize!(ctx::LiftContext, b)
-    ir = get_ir(b)
-    ir = compact!(ir)
-    ir = getfield_elim_pass!(ir)
-    ir = adce_pass!(ir)
-    ir = compact!(ir)
-    return ir
-end
-
 function lift(fn, tt::Type{T}; 
         jit = false, opt = false) where T
     symtypes = Tuple{map(tt.parameters) do p
@@ -79,11 +67,13 @@ function lift(fn, tt::Type{T};
     if !jit
         return Mixtape.emit(_lift, 
                             Tuple{typeof(fn), symtypes, T};
-                            ctx = LiftContext(), opt = opt)
+                            ctx = LiftContext(), 
+                            opt = opt)
     else
         entry = Mixtape.jit(_lift, 
                             Tuple{typeof(fn), symtypes, T};
-                            ctx = LiftContext())
+                            ctx = LiftContext(),
+                            opt = opt)
         blanks = Tuple(map(blank, tt.parameters))
         return function (symargs...)
             entry(fn, symargs, blanks)
