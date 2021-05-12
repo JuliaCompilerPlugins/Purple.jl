@@ -1,7 +1,8 @@
 module Purple
 
 using Mixtape
-import Mixtape: CompilationContext, transform, allow
+import Mixtape: CompilationContext, transform, allow, optimize!
+using Core.Compiler: compact!, getfield_elim_pass!, adce_pass!
 using SymbolicUtils
 using SymbolicUtils: Symbolic, term, Sym, similarterm, promote_symtype
 using CodeInfoTools
@@ -15,7 +16,9 @@ function _lift(f::Function, syms::S, args::K) where {S <: Tuple, K <: Tuple}
     return t
 end
 
-struct LiftContext <: CompilationContext end
+struct LiftContext <: CompilationContext
+    opt::Bool
+end
 allow(ctx::LiftContext, mod::Module, fn::typeof(_lift), inner, args...) = true
 allow(ctx::LiftContext, mod::Module, fn::typeof(_lift), inner::typeof(SymbolicUtils.add_t), args...) = false
 allow(ctx::LiftContext, mod::Module, fn::typeof(_lift), inner::typeof(SymbolicUtils.makeadd), args...) = false
@@ -59,6 +62,19 @@ function transform(mix::LiftContext, src, sig)
     return CodeInfoTools.finish(b)
 end 
 
+function optimize!(ctx::LiftContext, b)
+    if ctx.opt
+        ir = julia_passes!(b)
+    else
+        ir = get_ir(b)
+        ir = compact!(ir)
+        ir = getfield_elim_pass!(ir)
+        ir = adce_pass!(ir)
+        ir = compact!(ir)
+    end
+    return ir
+end
+
 function lift(fn, tt::Type{T}; 
         jit = false, opt = false) where T
     symtypes = Tuple{map(tt.parameters) do p
@@ -67,13 +83,12 @@ function lift(fn, tt::Type{T};
     if !jit
         return Mixtape.emit(_lift, 
                             Tuple{typeof(fn), symtypes, T};
-                            ctx = LiftContext(), 
+                            ctx = LiftContext(opt),
                             opt = opt)
     else
         entry = Mixtape.jit(_lift, 
                             Tuple{typeof(fn), symtypes, T};
-                            ctx = LiftContext(),
-                            opt = opt)
+                            ctx = LiftContext(opt))
         blanks = Tuple(map(blank, tt.parameters))
         return function (symargs...)
             entry(fn, symargs, blanks)
