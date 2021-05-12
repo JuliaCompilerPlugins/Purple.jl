@@ -8,12 +8,12 @@ using SymbolicUtils: Symbolic, term, Sym, similarterm, promote_symtype
 using CodeInfoTools
 using CodeInfoTools: resolve
 
-blank(t::Type{Int}) = 0
-blank(t::Type{Float64}) = 0.0
+unwrap(s::Type{Sym{T, K}}) where {T, K} = T
+unwrap(s::Type) = s
+wrap(t::Type{T}) where T = Sym{T, Nothing}
 
-function _lift(f::Function, syms::S, args::K) where {S <: Tuple, K <: Tuple}
-    t = term(f, syms...)
-    return t
+function _lift(f::Function, syms::S) where S <: Tuple
+    return term(f, syms...)
 end
 
 struct LiftContext <: CompilationContext
@@ -31,29 +31,41 @@ function transform(mix::LiftContext, src, sig)
 
     b = CodeInfoTools.Builder(src)
     forward = sig[2].instance
-    argtypes = sig[4 : end]
+    symtypes = sig[3]
+    argtypes = Tuple{map(unwrap, sig[3].parameters)...}
+    largtypes = length(argtypes.parameters)
     try
-        forward = CodeInfoTools.code_info(forward, argtypes...)
+        forward = CodeInfoTools.code_info(forward, argtypes)
     catch
         return src
     end
     forward === nothing && return src
     slotmap = Dict()
-    symbolicmap = Dict()
-    for (ind, a) in enumerate(forward.slotnames[2 : end])
-        o = push!(b, Expr(:call, Base.getindex, slot(4), ind))
+
+    # Slots as args.
+    for (ind, a) in enumerate(forward.slotnames[2 : 1 + largtypes])
+        o = push!(b, Expr(:call, Base.getindex, slot(3), ind))
         setindex!(slotmap, o, get_slot(forward, a))
-        v = push!(b, Expr(:call, Base.getindex, slot(3), ind))
-        setindex!(symbolicmap, v, o)
     end
+
+    # Extra slots.
+    for (ind, a) in enumerate(forward.slotnames[2 + largtypes : end])
+        s = slot!(b, a)
+    end
+
     for (v, st) in enumerate(forward.code)
-        if st isa Expr &&
-            st.head == :call
-            args = walk(v -> resolve(get(slotmap, v, v)), st).args[2 : end]
-            symbolicargs = map(v -> get(symbolicmap, v, v), args)
-            ttup = push!(b, Expr(:call, tuple, symbolicargs...))
-            atup = push!(b, Expr(:call, tuple, args...))
-            ex = Expr(:call, _lift, st.args[1], ttup, atup)
+        if st isa Expr
+            if st.head == :call
+                args = walk(v -> resolve(get(slotmap, v, v)), st).args[2 : end]
+                atup = push!(b, Expr(:call, tuple, args...))
+                ex = Expr(:call, _lift, st.args[1], atup)
+            elseif st.head == :(=)
+                callexpr = st.args[2]
+                args = walk(v -> resolve(get(slotmap, v, v)), callexpr).args[2 : end]
+                atup = push!(b, Expr(:call, tuple, args...))
+                ex = Expr(:(=), st.args[1], 
+                          Expr(:call, _lift, callexpr.args[1], atup))
+            end
         else
             ex = walk(v -> get(slotmap, v, v), st)
         end
@@ -82,16 +94,15 @@ function lift(fn, tt::Type{T};
                      end...}
     if !jit
         return Mixtape.emit(_lift, 
-                            Tuple{typeof(fn), symtypes, T};
+                            Tuple{typeof(fn), symtypes};
                             ctx = LiftContext(opt),
                             opt = opt)
     else
         entry = Mixtape.jit(_lift, 
-                            Tuple{typeof(fn), symtypes, T};
+                            Tuple{typeof(fn), symtypes};
                             ctx = LiftContext(opt))
-        blanks = Tuple(map(blank, tt.parameters))
         return function (symargs...)
-            entry(fn, symargs, blanks)
+            entry(fn, symargs)
         end
     end
 end
