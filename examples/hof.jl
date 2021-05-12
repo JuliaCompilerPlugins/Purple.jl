@@ -9,6 +9,13 @@ end
 
 src = lift(fn,
            Tuple{Int};
+           clean = true,
+           jit = false,
+           opt = false)
+display(src)
+
+src = lift(fn,
+           Tuple{Int};
            jit = false,
            opt = false)
 display(src)
