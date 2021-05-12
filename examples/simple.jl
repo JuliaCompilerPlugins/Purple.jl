@@ -13,7 +13,7 @@ end
 src = lift(fn,
            Tuple{Int, Int};
            jit = false,
-           opt = true)
+           opt = false)
 display(src)
 
 f = lift(fn,

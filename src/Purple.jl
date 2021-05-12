@@ -3,16 +3,22 @@ module Purple
 using Mixtape
 import Mixtape: CompilationContext, transform, allow, optimize!
 using Core.Compiler: compact!, getfield_elim_pass!, adce_pass!
-using SymbolicUtils
-using SymbolicUtils: Symbolic, term, Sym, similarterm, promote_symtype
 using CodeInfoTools
 using CodeInfoTools: resolve
+using SymbolicUtils
+using SymbolicUtils: Symbolic, term, Sym, similarterm, promote_symtype
 
 unwrap(s::Type{Sym{T, K}}) where {T, K} = T
 unwrap(s::Type) = s
 wrap(t::Type{T}) where T = Sym{T, Nothing}
 
-function _lift(f::Function, syms::S) where S <: Tuple
+# _activate is a "semantic stub" function which gets filled in by
+# the src of Tuple{typeof(f), syms...}.
+# In short, _activate activates the transform at that call site.
+function _activate(f::Function, syms::S) where S <: Tuple end
+
+# _deactivate is a fallback stub which just constructs a new Term.
+function _deactivate(f::Function, syms::S) where S <: Tuple
     return term(f, syms...)
 end
 
@@ -20,17 +26,17 @@ struct LiftContext <: CompilationContext
     opt::Bool
 end
 
-allow(ctx::LiftContext, mod::Module, fn::typeof(_lift), inner, args...) = true
-allow(ctx::LiftContext, mod::Module, fn::typeof(_lift), inner::typeof(SymbolicUtils.add_t), args...) = false
-allow(ctx::LiftContext, mod::Module, fn::typeof(_lift), inner::typeof(SymbolicUtils.makeadd), args...) = false
+allow(ctx::LiftContext, mod::Module, fn::typeof(_activate), inner, args...) = true
+allow(ctx::LiftContext, mod::Module, fn::typeof(_activate), inner::typeof(SymbolicUtils.add_t), args...) = false
+allow(ctx::LiftContext, mod::Module, fn::typeof(_activate), inner::typeof(SymbolicUtils.makeadd), args...) = false
 
-# Wrap each call with `_lift`.
+# Wrap each call with `_deactivate`.
 # Otherwise, if the Expr has .head == :(=), try and wrap the RHS.
 function swap!(b, v, st::Expr, slotmap)
     if st.head == :call
         args = walk(l -> resolve(get(slotmap, l, l)), st).args[2 : end]
         atup = push!(b, Expr(:call, tuple, args...))
-        return Expr(:call, _lift, st.args[1], atup)
+        return Expr(:call, _deactivate, st.args[1], atup)
     elseif st.head == :(=) && 
         st.args[2] isa Expr &&
         st.args[2].head == :call
@@ -38,13 +44,14 @@ function swap!(b, v, st::Expr, slotmap)
         args = walk(l -> resolve(get(slotmap, l, l)), callexpr).args[2 : end]
         atup = push!(b, Expr(:call, tuple, args...))
         return Expr(:(=), st.args[1], 
-                    Expr(:call, _lift, callexpr.args[1], atup))
+                    Expr(:call, _deactivate, callexpr.args[1], atup))
     else
         return st
     end
 end
 
 swap!(b, v, st, slotmap) = walk(l -> get(slotmap, l, l), st)
+swap!(b, v, st::Core.NewvarNode, slotmap) = st
 
 function transform(mix::LiftContext, src, sig)
     
@@ -110,12 +117,12 @@ function lift(fn, tt::Type{T};
                          Sym{p, Nothing}
                      end...}
     if !jit
-        return Mixtape.emit(_lift, 
+        return Mixtape.emit(_activate, 
                             Tuple{typeof(fn), symtypes};
                             ctx = LiftContext(opt),
                             opt = opt)
     else
-        entry = Mixtape.jit(_lift, 
+        entry = Mixtape.jit(_activate, 
                             Tuple{typeof(fn), symtypes};
                             ctx = LiftContext(opt))
         return function (symargs...)
